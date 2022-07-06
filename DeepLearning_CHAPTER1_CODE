@@ -1,0 +1,180 @@
+class ImageTransform():
+    """
+화상의 전처리 클래스훈련 시, 검증 시에 다른 동작을 한다.
+이미지의 사이즈를 리사이즈하여 색상을 표준화한다.
+훈련 시 Random Resized Crop와 Random Horizon tal Flip으로 데이터 오규멘테이션 한다.
+
+
+    Attributes
+    ----------
+    resize : int
+    리사이즈의 이미지 크기.
+    mean: (R,G,B)
+    각 색 채널의 평균값.
+    std: (R,G,B)
+    각 색 채널의 표준 편차.
+    """
+
+    def __init__(self, resize, mean, std):
+        self.data_transform = {
+            'train': transforms.Compose([
+                transforms.RandomResizedCrop(
+                    resize, scale=(0.5, 1.0)),  # 데이터 확장
+                transforms.RandomHorizontalFlip(),  # 데이터 확장
+                transforms.ToTensor(),  # 텐서로 변환
+                transforms.Normalize(mean, std)  # 표준화
+            ]),
+            'val': transforms.Compose([
+                transforms.Resize(resize),  # 리사이즈
+                transforms.CenterCrop(resize),  # 화상 중앙을 resize*resize로 자른다.
+                transforms.ToTensor(),  # 텐서로 변환
+                transforms.Normalize(mean, std)  # 표준화
+            ])
+        }
+
+    def __call__(self, img, phase='train'):
+        """
+        Parameters
+        ----------
+        phase : 'train' or 'val'
+            전처리 모드 지정
+        """
+        return self.data_transform[phase](img)
+        
+        
+# 훈련 시 화상 전처리 동작 확인
+# 실행할 때마다 처리 결과 화상이 바뀐다.
+
+# 1. 화상읽기
+image_file_path = './data/goldenretriever-3724972_640.jpg'
+img = Image.open(image_file_path)   # [높이][폭][색RGB]
+
+# 2. 원본 화상 표시
+plt.imshow(img)
+plt.show()
+
+# 3. 화상 전처리, 처리된 화상 표시
+size = 224
+mean = (0.485, 0.456, 0.406)
+std = (0.229, 0.224, 0.225)
+
+transform = ImageTransform(size, mean, std)
+img_transformed = transform(img, phase="train")  # torch.Size([3, 224, 224])
+
+# (색상, 높이, 너비)를 (높이, 너비, 색상)으로 변환하고 0-1로 값을 제한해 표시
+img_transformed = img_transformed.numpy().transpose((1, 2, 0))
+img_transformed = np.clip(img_transformed, 0, 1)
+plt.imshow(img_transformed)
+plt.show()
+
+# 미니 배치 크기 지정
+batch_size = 32
+
+# DataLoader 작성
+train_dataloader = torch.utils.data.DataLoader(
+    train_dataset, batch_size=batch_size, shuffle=True)
+
+val_dataloader = torch.utils.data.DataLoader(
+    val_dataset, batch_size=batch_size, shuffle=False)
+
+# 사전형 변수에 정리 -> 학습 및 검증 시 쉽게 다루기 위한 목적
+dataloaders_dict = {"train": train_dataloader, "val": val_dataloader}
+
+# 동작 확인
+batch_iterator = iter(dataloaders_dict["train"])  # 반복자(iterator)로 변환
+inputs, labels = next(
+    batch_iterator)  # 첫 번째 요소 추출
+print(inputs.size())
+print(labels)
+
+# 학습된 VGG-16 모델 로드
+# VGG-16 모델의 인스턴스 생성
+use_pretrained = True  # 학습된 파라미터 사용
+net = models.vgg16(pretrained=use_pretrained)
+
+# VGG16의 마지막 출력층의 출력 유닛을 개미와 벌인 두 개로 변경
+net.classifier[6] = nn.Linear(in_features=4096, out_features=2)
+
+# 훈련 모드로 설정
+net.train()
+
+print('네트워크 설정 완료 : 학습된 가중치를 읽어들여 훈련 모드로 설정했습니다.')
+
+criterion = nn.CrossEntropyLoss()
+
+# 전이학습에서 학습시킬 파라미터를 params_to_update 변수에 저장
+params_to_update = []
+
+# 학습시킬 파라미터명
+update_param_names = ["classifier.6.weight", "classifier.6.bias"]
+
+# 학습시킬 파라미터 외에는 경사를 계산하지 않고 변하지 않도록 설정
+for name, param in net.named_parameters():
+    if name in update_param_names:
+        param.requires_grad = True
+        params_to_update.append(param)
+        print(name)
+    else:
+        param.requires_grad = False
+
+# params_to_update의 내용 확인
+print("-----------")
+print(params_to_update)
+
+#최적화 기법 설정
+optimizer = optim.SGD(params = params_to_update, lr = 0.001, momentum = 0.9)
+
+# 모델을 학습시키는 함수 작성
+
+def train_model(net, dataloaders_dict, criterion, optimizer, num_epochs):
+
+    # epoch루프
+    for epoch in range(num_epochs):
+        print('Epoch {}/{}'.format(epoch+1, num_epochs))
+        print('-------------')
+
+        # epoch별 학습 및 검증루프
+        for phase in ['train', 'val']:
+            if phase == 'train':
+                net.train()  # 모델을 훈련 모드로
+            else:
+                net.eval()   # 모델을 검증 모드로
+
+            epoch_loss = 0.0  # epoch 손실합
+            epoch_corrects = 0  # epoch 정답 수
+
+            # 학습하지 않을 시 검증 성능을 확인하기 위해 epoch = 0의 훈련 생략
+            if (epoch == 0) and (phase == 'train'):
+                continue
+
+            # 데이터 로더로 미니 배치를 꺼내는 루프
+            for inputs, labels in tqdm(dataloaders_dict[phase]):
+
+                # optimizer 초기화
+                optimizer.zero_grad()
+
+                # 순전파 계산
+                with torch.set_grad_enabled(phase == 'train'):
+                    outputs = net(inputs)
+                    loss = criterion(outputs, labels)  # 손실계산
+                    _, preds = torch.max(outputs, 1)  # 라벨 예측
+                    
+  
+                    # 훈련 시에는 오차 역전파
+                    if phase == 'train':
+                        loss.backward()
+                        optimizer.step()
+
+                    # 반복 결과 계산
+                    # 손실 합계 갱신
+                    epoch_loss += loss.item() * inputs.size(0)  
+                    # 정답 수의 합계 갱신
+                    epoch_corrects += torch.sum(preds == labels.data)
+
+            # epochごとのlossと正解率を表示
+            epoch_loss = epoch_loss / len(dataloaders_dict[phase].dataset)
+            epoch_acc = epoch_corrects.double(
+            ) / len(dataloaders_dict[phase].dataset)
+
+            print('{} Loss: {:.4f} Acc: {:.4f}'.format(
+                phase, epoch_loss, epoch_acc))
