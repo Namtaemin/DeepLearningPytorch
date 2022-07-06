@@ -1,0 +1,93 @@
+파일제공 : https://github.com/YutaroOgawa/pytorch_advanced.git
+
+화상분류와 전이학습(VGG)
+
+※파이토치를 활용한 딥러닝 구현 흐름
+
+1. 전처리, 후처리, 네트워크 모델의 입출력 확인
+2. 데이터셋 작성
+3. 데이터 로더 작성
+4. 네트워크 모델 작성
+5. 순전파 정의
+6. 손실함수 정의
+7. 최적화 기법 설정
+8. 학습/검증 실시
+9. 테스트 데이터로 추론
+
+※ tqdm패키지 : for 루프의 경과 시간과 남은 시간 측정하는 패키지
+
+※ 데이터셋 작성
+ImageTransform : 화상의 전처리 클래스
+
+# 入力画像の前処理をするクラス
+# 訓練時と推論時で処理が異なる
+
+
+class ImageTransform():
+    """
+화상의 전처리 클래스훈련 시, 검증 시에 다른 동작을 한다.
+이미지의 사이즈를 리사이즈하여 색상을 표준화한다.
+훈련 시 Random Resized Crop와 Random Horizon tal Flip으로 데이터 오규멘테이션 한다.
+
+
+    Attributes
+    ----------
+    resize : int
+    리사이즈의 이미지 크기.
+    mean: (R,G,B)
+    각 색 채널의 평균값.
+    std: (R,G,B)
+    각 색 채널의 표준 편차.
+    """
+
+    def __init__(self, resize, mean, std):
+        self.data_transform = {
+            'train': transforms.Compose([
+                transforms.RandomResizedCrop(
+                    resize, scale=(0.5, 1.0)),  # 데이터 확장
+                transforms.RandomHorizontalFlip(),  # 데이터 확장
+                transforms.ToTensor(),  # 텐서로 변환
+                transforms.Normalize(mean, std)  # 표준화
+            ]),
+            'val': transforms.Compose([
+                transforms.Resize(resize),  # 리사이즈
+                transforms.CenterCrop(resize),  # 화상 중앙을 resize*resize로 자른다.
+                transforms.ToTensor(),  # 텐서로 변환
+                transforms.Normalize(mean, std)  # 표준화
+            ])
+        }
+
+    def __call__(self, img, phase='train'):
+        """
+        Parameters
+        ----------
+        phase : 'train' or 'val'
+            전처리 모드 지정
+        """
+        return self.data_transform[phase](img)
+
+
+# 훈련 시 화상 전처리 동작 확인
+# 실행할 때마다 처리 결과 화상이 바뀐다.
+
+# 1. 화상읽기
+image_file_path = './data/goldenretriever-3724972_640.jpg'
+img = Image.open(image_file_path)   # [높이][폭][색RGB]
+
+# 2. 원본 화상 표시
+plt.imshow(img)
+plt.show()
+
+# 3. 화상 전처리, 처리된 화상 표시
+size = 224
+mean = (0.485, 0.456, 0.406)
+std = (0.229, 0.224, 0.225)
+
+transform = ImageTransform(size, mean, std)
+img_transformed = transform(img, phase="train")  # torch.Size([3, 224, 224])
+
+# (색상, 높이, 너비)를 (높이, 너비, 색상)으로 변환하고 0-1로 값을 제한해 표시
+img_transformed = img_transformed.numpy().transpose((1, 2, 0))
+img_transformed = np.clip(img_transformed, 0, 1)
+plt.imshow(img_transformed)
+plt.show()
